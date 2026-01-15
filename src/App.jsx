@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import './App.css'
 
 function App() {
@@ -6,10 +6,15 @@ function App() {
   const [serviceName, setServiceName] = useState('');
   const [monthly, setMonthly] = useState('');
   const [yearly, setYearly] = useState('');
+  const [subs, setSubs] = useState(() => {
+    const savedSubs = localStorage.getItem('subSaveData');
+    return savedSubs ? JSON.parse(savedSubs) : [];
+  });
   
-  // 登録されたサブスクのリスト
-  const [subs, setSubs] = useState([]);
-
+  // --- ローカルストレージ保存 ---
+  useEffect(() => {
+    localStorage.setItem('subSaveData', JSON.stringify(subs));
+  }, [subs]);
   // --- リアルタイム計算ロジック ---
   const monthlyNum = Number(monthly) || 0;
   const yearlyNum = Number(yearly) || 0;
