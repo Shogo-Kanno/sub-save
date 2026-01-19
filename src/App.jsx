@@ -1,140 +1,288 @@
 import { useState, useEffect } from 'react'
 import './App.css'
+import { supabase } from './supabaseClient'
 
 function App() {
-  // --- 状態(State)の定義 ---
-  const [serviceName, setServiceName] = useState('');
-  const [monthly, setMonthly] = useState('');
-  const [yearly, setYearly] = useState('');
-  const [subs, setSubs] = useState(() => {
-    const savedSubs = localStorage.getItem('subSaveData');
-    return savedSubs ? JSON.parse(savedSubs) : [];
-  });
-  
-  // --- ローカルストレージ保存 ---
+  const [session, setSession] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [subs, setSubs] = useState([])
+
+  // フォーム用
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [isLoginMode, setIsLoginMode] = useState(true)
+
+  const [serviceName, setServiceName] = useState('')
+  const [monthly, setMonthly] = useState('')
+  const [yearly, setYearly] = useState('')
+
+  // --- ロジック部分（変更なし） ---
   useEffect(() => {
-    localStorage.setItem('subSaveData', JSON.stringify(subs));
-  }, [subs]);
-  // --- リアルタイム計算ロジック ---
-  const monthlyNum = Number(monthly) || 0;
-  const yearlyNum = Number(yearly) || 0;
-  const currentYearlyFromMonthly = monthlyNum * 12;
-  const currentDiff = (yearlyNum > 0) ? currentYearlyFromMonthly - yearlyNum : 0;
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session)
+      if (session) fetchSubscriptions()
+      else setLoading(false)
+    })
 
-  // --- アクション ---
-  const addSubscription = () => {
-    if (monthlyNum <= 0) return;
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session)
+      if (session) fetchSubscriptions()
+      else {
+        setSubs([])
+        setLoading(false)
+      }
+    })
 
-    const newSub = {
-      id: Date.now(),
-      name: serviceName || "無名のサブスク",
-      monthly: monthlyNum,
-      yearly: yearlyNum,
-      saving: currentDiff
-    };
+    return () => subscription.unsubscribe()
+  }, [])
 
-    setSubs([...subs, newSub]);
-    
-    // 入力欄をリセット
-    setServiceName('');
-    setMonthly('');
-    setYearly('');
-  };
+  async function fetchSubscriptions() {
+    setLoading(true)
+    const { data, error } = await supabase
+      .from('subscriptions')
+      .select('*')
+      .order('created_at', { ascending: true })
 
-  const deleteSub = (id) => {
-    setSubs(subs.filter(sub => sub.id !== id));
-  };
+    if (error) console.error('Error:', error)
+    else setSubs(data || [])
+    setLoading(false)
+  }
 
-  // 全体の合計計算
-  const totalMonthly = subs.reduce((sum, s) => sum + s.monthly, 0);
-  const totalPotentialSaving = subs.reduce((sum, s) => sum + s.saving, 0);
+  const handleAuth = async (e) => {
+    e.preventDefault()
+    setLoading(true)
+    let result
+    if (isLoginMode) {
+      result = await supabase.auth.signInWithPassword({ email, password })
+    } else {
+      result = await supabase.auth.signUp({ email, password })
+    }
+    const { error } = result
+    if (error) alert(error.message)
+    else if (!isLoginMode) alert('確認メールを送信しました！')
+    setLoading(false)
+  }
 
+  const addSubscription = async (e) => {
+    e.preventDefault()
+    if (!monthly || !session) return
+    const m = Number(monthly)
+    const y = Number(yearly) || 0
+    const diff = (y > 0) ? (m * 12) - y : 0
+
+    const { data, error } = await supabase
+      .from('subscriptions')
+      .insert([{ 
+        user_id: session.user.id,
+        name: serviceName || "無名のサブスク",
+        monthly: m,
+        yearly: y,
+        saving: diff
+      }])
+      .select()
+
+    if (!error && data) {
+      setSubs([...subs, data[0]])
+      setServiceName('')
+      setMonthly('')
+      setYearly('')
+    } else alert('保存に失敗しました')
+  }
+
+  const deleteSub = async (id) => {
+    const { error } = await supabase
+      .from('subscriptions')
+      .delete()
+      .eq('id', id)
+    if (!error) setSubs(subs.filter(sub => sub.id !== id))
+    else alert('削除できませんでした')
+  }
+
+  const totalMonthly = subs.reduce((sum, s) => sum + s.monthly, 0)
+  const totalSaving = subs.reduce((sum, s) => sum + s.saving, 0)
+
+  // ---------------------------------------------------------
+  // デザイン部分 (修正版)
+  // ---------------------------------------------------------
+
+  // 共通コンテナ（画面中央寄せ＆サイズ統一）
+  const Container = ({ children }) => (
+    <div className="min-h-screen bg-gray-100 flex flex-col justify-center items-center py-10 px-4 font-sans text-gray-800">
+      <div className="w-full max-w-lg bg-white rounded-2xl shadow-xl overflow-hidden">
+        {children}
+      </div>
+    </div>
+  )
+
+  // 共通ボタンデザイン
+  const PrimaryButton = ({ onClick, text, type = "button", disabled }) => (
+    <button 
+      type={type}
+      onClick={onClick}
+      disabled={disabled}
+      className="w-full bg-blue-600 text-white font-bold py-3 rounded-xl shadow-md 
+                 transform transition-all duration-200 
+                 hover:bg-blue-700 hover:shadow-lg hover:-translate-y-1 
+                 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
+    >
+      {disabled ? '処理中...' : text}
+    </button>
+  )
+
+  // A. ログイン画面
+  if (!session) {
+    return (
+      <Container>
+        <div className="bg-blue-600 p-8 text-center">
+          <h1 className="text-3xl font-bold text-white mb-2 tracking-wider">SUB SAVE</h1>
+          <p className="text-blue-100 text-sm">自分だけのサブスク管理</p>
+        </div>
+        
+        <div className="p-8">
+          <div className="flex mb-8 bg-gray-100 p-1 rounded-lg">
+            <button 
+              onClick={() => setIsLoginMode(true)}
+              className={`flex-1 py-2 text-sm font-bold rounded-md transition-all ${isLoginMode ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
+            >
+              ログイン
+            </button>
+            <button 
+              onClick={() => setIsLoginMode(false)}
+              className={`flex-1 py-2 text-sm font-bold rounded-md transition-all ${!isLoginMode ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
+            >
+              新規登録
+            </button>
+          </div>
+
+          <form onSubmit={handleAuth} className="space-y-5">
+            <div>
+              <label className="block text-xs font-bold text-gray-500 mb-1">メールアドレス</label>
+              <input 
+                type="email" required
+                className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none transition"
+                value={email} onChange={(e) => setEmail(e.target.value)} 
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-gray-500 mb-1">パスワード</label>
+              <input 
+                type="password" required minLength={6}
+                className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none transition"
+                value={password} onChange={(e) => setPassword(e.target.value)} 
+              />
+            </div>
+            <PrimaryButton type="submit" disabled={loading} text={isLoginMode ? 'ログインして始める' : 'アカウントを作成'} />
+          </form>
+        </div>
+      </Container>
+    )
+  }
+
+  // B. ダッシュボード画面
   return (
-    <div className="container">
-      <header className="app-header">
-        <h1>SUB SAVE</h1>
-        <p>あなたのサブスク診断</p>
+    <Container>
+      {/* ヘッダー（青背景に変更） */}
+      <header className="bg-blue-600 p-6 flex justify-between items-center">
+        <div>
+          <h1 className="text-2xl font-bold text-white tracking-tight">SUB SAVE</h1>
+          <p className="text-xs text-blue-100 mt-1">{session.user.email}</p>
+        </div>
+        <button 
+          onClick={() => supabase.auth.signOut()} 
+          className="text-xs font-bold text-white bg-blue-500 hover:bg-blue-700 px-3 py-2 rounded-lg transition"
+        >
+          ログアウト
+        </button>
       </header>
 
-      <main>
-        <section className="card">
-          <h2>サブスクを入力</h2>
-          <div className="form-group">
-            <label>サブスク名</label>
+      <div className="p-6 bg-gray-50/50">
+        {/* 入力フォーム */}
+        <section className="bg-white p-5 rounded-xl shadow-sm border border-gray-100 mb-6">
+          <h2 className="text-sm font-bold text-gray-700 mb-4 flex items-center gap-2">
+            <span className="w-1 h-4 bg-blue-500 rounded-full"></span>
+            サブスクを追加
+          </h2>
+          <form onSubmit={addSubscription} className="space-y-4">
             <input 
-              type="text" 
-              placeholder="例：Netflix" 
-              value={serviceName}
-              onChange={(e) => setServiceName(e.target.value)}
+              type="text" required placeholder="サービス名 (例: Netflix)"
+              className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none transition"
+              value={serviceName} onChange={(e) => setServiceName(e.target.value)} 
             />
-          </div>
-          <div className="form-group">
-            <label>月額（円）</label>
-            <input 
-              type="number" 
-              placeholder="例：1490" 
-              value={monthly}
-              onChange={(e) => setMonthly(e.target.value)}
-            />
-          </div>
-          <div className="form-group">
-            <label>年額プラン（ある場合）</label>
-            <input 
-              type="number" 
-              placeholder="例：14900" 
-              value={yearly}
-              onChange={(e) => setYearly(e.target.value)}
-            />
-          </div>
-
-          {/* リアルタイム表示エリア */}
-          {monthlyNum > 0 && (
-            <div className="message" style={{ background: '#eef2ff', marginBottom: '10px' }}>
-              <p>現在の入力：年間 <strong>{currentYearlyFromMonthly.toLocaleString()}</strong> 円</p>
-              {currentDiff > 0 && (
-                <p style={{ color: '#d32f2f', fontWeight: 'bold' }}>
-                  → 年額プランで <strong>{currentDiff.toLocaleString()}</strong> 円 節約可能！
-                </p>
-              )}
+            <div className="flex gap-3">
+              <input 
+                type="number" required placeholder="月額 (円)"
+                className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none transition"
+                value={monthly} onChange={(e) => setMonthly(e.target.value)} 
+              />
+              <input 
+                type="number" placeholder="年額 (任意)"
+                className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none transition"
+                value={yearly} onChange={(e) => setYearly(e.target.value)} 
+              />
             </div>
-          )}
+            
+            {Number(monthly) > 0 && Number(yearly) > 0 && (
+              <div className="text-sm bg-indigo-50 text-indigo-700 p-3 rounded-lg border border-indigo-100 flex items-center justify-center gap-2">
+                <span>✨ 年額プランで</span>
+                <span className="font-bold text-lg">{((Number(monthly) * 12) - Number(yearly)).toLocaleString()}円</span>
+                <span>お得</span>
+              </div>
+            )}
 
-          <button onClick={addSubscription} id="diagnoseBtn">
-            リストに追加する
-          </button>
+            <PrimaryButton type="submit" text="リストに追加する" />
+          </form>
         </section>
 
-        {/* 登録済みリスト */}
-        {subs.length > 0 && (
-          <section className="card">
-            <h2>登録済みリスト</h2>
-            <ul style={{ listStyle: 'none', padding: 0 }}>
-              {subs.map(sub => (
-                <li key={sub.id} className="message" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+        {/* リスト表示 */}
+        <section>
+          <div className="flex justify-between items-end mb-3 px-1">
+            <h2 className="text-sm font-bold text-gray-500">登録済みリスト</h2>
+            <div className="text-right">
+              <span className="text-xs text-gray-400">合計</span>
+              <span className="text-xl font-bold text-gray-800 ml-2">{totalMonthly.toLocaleString()}</span>
+              <span className="text-xs font-normal text-gray-500 ml-1">円/月</span>
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            {subs.length === 0 ? (
+              <div className="text-center py-10 text-gray-400 bg-white rounded-xl border border-dashed border-gray-200">
+                データがありません
+              </div>
+            ) : (
+              subs.map(sub => (
+                <div key={sub.id} className="group bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex justify-between items-center transition hover:shadow-md">
                   <div>
-                    <strong>{sub.name}</strong>：月 {sub.monthly.toLocaleString()}円
-                    {sub.saving > 0 && <div style={{ fontSize: '12px', color: '#d32f2f' }}>節約可能：{sub.saving.toLocaleString()}円</div>}
+                    <h3 className="font-bold text-gray-800">{sub.name}</h3>
+                    <div className="text-sm text-gray-500 mt-1">
+                      月額 <span className="font-medium text-gray-700">{Number(sub.monthly).toLocaleString()}</span> 円
+                    </div>
+                    {sub.saving > 0 && (
+                      <div className="mt-2 inline-flex items-center text-xs font-bold text-green-600 bg-green-50 px-2 py-1 rounded-md">
+                        💰 年 {Number(sub.saving).toLocaleString()}円 節約可
+                      </div>
+                    )}
                   </div>
                   <button 
                     onClick={() => deleteSub(sub.id)}
-                    style={{ background: '#ffcdd2', border: 'none', borderRadius: '4px', cursor: 'pointer', padding: '4px 8px' }}
+                    className="bg-red-50 text-red-500 text-xs font-bold px-3 py-2 rounded-lg hover:bg-red-500 hover:text-white transition-colors"
                   >
                     削除
                   </button>
-                </li>
-              ))}
-            </ul>
-
-            <div style={{ marginTop: '20px', borderTop: '2px solid #1e88e5', paddingTop: '10px' }}>
-              <p>合計月額：<strong>{totalMonthly.toLocaleString()}</strong> 円</p>
-              <p style={{ fontSize: '18px', color: '#1e88e5' }}>
-                年間最大節約額：<strong>{totalPotentialSaving.toLocaleString()}</strong> 円
-              </p>
+                </div>
+              ))
+            )}
+          </div>
+          
+          {totalSaving > 0 && (
+            <div className="mt-6 bg-gradient-to-r from-green-500 to-emerald-600 text-white p-4 rounded-xl shadow-lg text-center">
+              <p className="text-sm opacity-90">見直しチャンス！</p>
+              <p className="text-lg font-bold">年間 最大 {totalSaving.toLocaleString()} 円 の節約</p>
             </div>
-          </section>
-        )}
-      </main>
-    </div>
+          )}
+        </section>
+      </div>
+    </Container>
   )
 }
 
